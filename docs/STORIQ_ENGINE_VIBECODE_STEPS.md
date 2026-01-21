@@ -1360,7 +1360,7 @@ Add final polish for a complete experience:
 
 1. ONBOARDING FLOW (first-time users):
 
-   Screen 1: "Welcome to the Storiq V2 Engine"
+   Screen 1: "Welcome to the Storiq Engine"
    - Brief intro: "Your AI development partner for screenplays"
    - What to expect: "Upload your draft. Get honest, actionable feedback. Make it undeniable."
    - [Get Started]
