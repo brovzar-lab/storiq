@@ -13,7 +13,12 @@ type IssueType =
   | "emotional-flat"
   | "emotional-spike"
   | "pacing-issue"
-  | "theme-disconnect";
+  | "theme-disconnect"
+  | "antagonist-shallow"
+  | "antagonist-absent"
+  | "antagonist-incompetent"
+  | "antagonist-no-philosophy"
+  | "antagonist-no-mirror";
 
 interface SuggestFixRequest {
   issueType: IssueType;
@@ -157,6 +162,48 @@ Help the writer identify what might be causing the pacing problem and how to fix
       prompt += `ISSUE: ${issueContext.elementName} doesn't clearly connect to the theme "${screenplayContext.coreTheme}".
 
 Suggest specific ways to weave the theme into this element without being heavy-handed.`;
+      break;
+
+    case "antagonist-shallow":
+      prompt += `ISSUE: The antagonist "${issueContext.elementName}" feels one-dimensional or lacks depth.
+
+Help the writer add complexity to this antagonist by:
+1. Giving them a clear worldview/philosophy
+2. Making them the hero of their own story
+3. Adding layers beyond "evil" or "greedy"`;
+      break;
+
+    case "antagonist-absent":
+      prompt += `ISSUE: The antagonist "${issueContext.elementName}" disappears for too long in ${issueContext.sequenceName || "parts of the story"}.
+
+Suggest ways to maintain their presence/threat even when off-screen, or explain how their absence could be used intentionally for effect.`;
+      break;
+
+    case "antagonist-incompetent":
+      prompt += `ISSUE: The antagonist "${issueContext.elementName}" doesn't feel like a genuine threat.
+
+Help the writer make this antagonist more formidable by:
+1. Having them win sometimes or make smart moves
+2. Removing convenient mistakes that let the hero win
+3. Raising the stakes of confronting them`;
+      break;
+
+    case "antagonist-no-philosophy":
+      prompt += `ISSUE: The antagonist "${issueContext.elementName}" lacks a clear belief system or worldview.
+
+Great antagonists believe they're RIGHT. Help the writer develop:
+1. What does this antagonist believe?
+2. How did they come to this belief?
+3. How does this belief justify their actions in their own mind?`;
+      break;
+
+    case "antagonist-no-mirror":
+      prompt += `ISSUE: The antagonist "${issueContext.elementName}" doesn't reflect or contrast the protagonist thematically.
+
+The best antagonists mirror the protagonist or represent what they could become. Suggest how to:
+1. Connect the antagonist to the protagonist's lie/truth
+2. Make them represent the dark side of the theme
+3. Create a meaningful contrast that raises the stakes`;
       break;
 
     default:
