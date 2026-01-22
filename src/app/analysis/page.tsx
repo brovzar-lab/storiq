@@ -17,6 +17,7 @@ import {
   calculateArcHealth,
 } from "@/lib/visualizations/characterJourneyMapper";
 import type { ThemeConstellation, CharacterArc, EmotionalJourney } from "@/types/visualization";
+import type { AntagonistAuditResult } from "@/lib/agents/lenses/antagonistAudit";
 
 type AnalysisStatus = "idle" | "analyzing" | "complete" | "error";
 type CategoryFilter = "all" | "theme" | "character" | "pacing" | "structure" | "craft";
@@ -29,11 +30,13 @@ export default function AnalysisPage() {
   const [themeData, setThemeData] = useState<ThemeConstellation | null>(null);
   const [characterData, setCharacterData] = useState<CharacterArc | null>(null);
   const [emotionalData, setEmotionalData] = useState<(EmotionalJourney & { issues?: string[]; strengths?: string[] }) | null>(null);
+  const [antagonistData, setAntagonistData] = useState<AntagonistAuditResult | null>(null);
 
   // Analysis status
   const [themeStatus, setThemeStatus] = useState<AnalysisStatus>("idle");
   const [characterStatus, setCharacterStatus] = useState<AnalysisStatus>("idle");
   const [emotionalStatus, setEmotionalStatus] = useState<AnalysisStatus>("idle");
+  const [antagonistStatus, setAntagonistStatus] = useState<AnalysisStatus>("idle");
 
   // UI state
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
@@ -41,6 +44,7 @@ export default function AnalysisPage() {
     theme: false,
     character: false,
     emotional: false,
+    antagonist: false,
   });
 
   // Redirect if prerequisites not met (only after hydration)
@@ -152,6 +156,54 @@ export default function AnalysisPage() {
     }
   }, [screenplay, genre, sequences]);
 
+  // Run antagonist analysis
+  const runAntagonistAnalysis = useCallback(async () => {
+    if (!screenplay || !soul?.confirmed || !genre || sequences.length === 0) return;
+
+    setAntagonistStatus("analyzing");
+    try {
+      const response = await fetch("/api/analyze-antagonist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          screenplay: {
+            title: screenplay.title,
+            scenes: screenplay.scenes,
+            characters: screenplay.characters,
+          },
+          sequences,
+          soul: {
+            centralQuestion: soul.centralQuestion,
+            thematicArgument: soul.thematicArgument,
+            controllingIdea: soul.controllingIdea,
+            protagonistLie: soul.protagonistLie,
+            protagonistTruth: soul.protagonistTruth,
+          },
+          genreId: genre.id,
+          protagonistName: characterData?.characterName,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to analyze antagonist");
+
+      const result: AntagonistAuditResult = await response.json();
+      setAntagonistData(result);
+      setShowAIBadges((prev) => ({ ...prev, antagonist: true }));
+      setAntagonistStatus("complete");
+    } catch (error) {
+      console.error("Antagonist analysis failed:", error);
+      // Create minimal fallback
+      setAntagonistData({
+        antagonists: [],
+        overallThreatLevel: 50,
+        issues: [],
+        strengths: [],
+      });
+      setShowAIBadges((prev) => ({ ...prev, antagonist: false }));
+      setAntagonistStatus("complete");
+    }
+  }, [screenplay, soul, genre, sequences, characterData?.characterName]);
+
   // Run all analyses on mount
   useEffect(() => {
     if (!_hasHydrated || !screenplay || !soul?.confirmed || !genre?.confirmed) return;
@@ -160,6 +212,7 @@ export default function AnalysisPage() {
     if (themeStatus === "idle") runThemeAnalysis();
     if (characterStatus === "idle") runCharacterAnalysis();
     if (emotionalStatus === "idle") runEmotionalAnalysis();
+    if (antagonistStatus === "idle") runAntagonistAnalysis();
   }, [
     _hasHydrated,
     screenplay,
@@ -168,9 +221,11 @@ export default function AnalysisPage() {
     themeStatus,
     characterStatus,
     emotionalStatus,
+    antagonistStatus,
     runThemeAnalysis,
     runCharacterAnalysis,
     runEmotionalAnalysis,
+    runAntagonistAnalysis,
   ]);
 
   // Show loading while hydrating
@@ -187,7 +242,7 @@ export default function AnalysisPage() {
   }
 
   // Aggregate issues
-  const allIssues = aggregateAllIssues(themeData, characterData, emotionalData);
+  const allIssues = aggregateAllIssues(themeData, characterData, emotionalData, antagonistData);
   const issueCounts = getIssueCounts(allIssues);
   const issuesByCategory = getIssuesByCategory(allIssues);
   const healthScore = calculateHealthScore(allIssues, themeData, characterData);
@@ -199,8 +254,8 @@ export default function AnalysisPage() {
       : issuesByCategory[categoryFilter] || [];
 
   // Analysis progress
-  const isAnalyzing = themeStatus === "analyzing" || characterStatus === "analyzing" || emotionalStatus === "analyzing";
-  const analysisComplete = themeStatus === "complete" && characterStatus === "complete" && emotionalStatus === "complete";
+  const isAnalyzing = themeStatus === "analyzing" || characterStatus === "analyzing" || emotionalStatus === "analyzing" || antagonistStatus === "analyzing";
+  const analysisComplete = themeStatus === "complete" && characterStatus === "complete" && emotionalStatus === "complete" && antagonistStatus === "complete";
 
   // Screen context for ActionableInsight
   const screenplayContext = {
@@ -270,6 +325,7 @@ export default function AnalysisPage() {
                   {themeStatus === "analyzing" && "Analyzing theme connections... "}
                   {characterStatus === "analyzing" && "Analyzing character arc... "}
                   {emotionalStatus === "analyzing" && "Analyzing emotional journey... "}
+                  {antagonistStatus === "analyzing" && "Analyzing antagonist... "}
                 </p>
               </div>
             </div>
@@ -490,6 +546,93 @@ export default function AnalysisPage() {
                     {arcHealth.issues.length} issue{arcHealth.issues.length !== 1 ? "s" : ""}
                   </span>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Antagonist Summary */}
+        {antagonistData && antagonistData.antagonists.length > 0 && (
+          <div className="bg-[#1a1816] rounded-xl border border-[#3d3a38] p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-[#f5f5f5]">
+                Antagonist Analysis
+              </h2>
+              <div className="flex items-center gap-2">
+                {showAIBadges.antagonist && (
+                  <span className="px-2 py-0.5 rounded text-xs bg-green-500/20 text-green-400 border border-green-500/30">AI</span>
+                )}
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-[#78716c]">Threat Level:</span>
+                  <span className={`font-bold ${
+                    antagonistData.overallThreatLevel >= 70 ? "text-red-400" :
+                    antagonistData.overallThreatLevel >= 50 ? "text-amber-400" : "text-[#525252]"
+                  }`}>
+                    {antagonistData.overallThreatLevel}/100
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Primary Antagonist */}
+            {antagonistData.primaryAntagonist && (
+              <div className="mb-4">
+                <div className="text-xs text-[#78716c] mb-1">Primary Antagonist</div>
+                <p className="text-[#d4a574] font-medium">{antagonistData.primaryAntagonist}</p>
+              </div>
+            )}
+
+            {/* Antagonists Grid */}
+            <div className="grid md:grid-cols-2 gap-4">
+              {antagonistData.antagonists.slice(0, 2).map((ant, i) => (
+                <div key={i} className="bg-[#242220] rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[#f5f5f5] font-medium text-sm">{ant.name}</span>
+                    <span className="px-2 py-0.5 rounded text-xs bg-[#3d3a38] text-[#a8a29e]">
+                      {ant.type}
+                    </span>
+                  </div>
+                  {ant.philosophy && (
+                    <div className="mb-2">
+                      <div className="text-xs text-[#78716c] mb-1">Philosophy</div>
+                      <p className="text-[#a8a29e] text-sm italic">&ldquo;{ant.philosophy}&rdquo;</p>
+                    </div>
+                  )}
+                  {ant.mirrorConnection && (
+                    <div className="mb-2">
+                      <div className="text-xs text-[#78716c] mb-1">Mirror to Protagonist</div>
+                      <p className="text-[#a8a29e] text-xs">{ant.mirrorConnection}</p>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3 mt-2 pt-2 border-t border-[#3d3a38]">
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-[#78716c]">Competence:</span>
+                      <span className={`text-xs font-medium ${
+                        ant.competenceScore >= 7 ? "text-red-400" :
+                        ant.competenceScore >= 5 ? "text-amber-400" : "text-[#525252]"
+                      }`}>
+                        {ant.competenceScore}/10
+                      </span>
+                    </div>
+                    {ant.thanosTestPass && (
+                      <span className="text-xs text-green-400">✓ Thanos Test</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Strengths */}
+            {antagonistData.strengths.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-[#3d3a38]">
+                <div className="text-xs text-[#78716c] mb-2">Strengths</div>
+                <div className="flex flex-wrap gap-2">
+                  {antagonistData.strengths.slice(0, 3).map((strength, i) => (
+                    <span key={i} className="px-2 py-1 bg-green-500/10 border border-green-500/30 rounded text-xs text-green-400">
+                      {strength}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
           </div>

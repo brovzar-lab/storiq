@@ -13,7 +13,12 @@ export type IssueType =
   | "emotional-flat"
   | "emotional-spike"
   | "pacing-issue"
-  | "theme-disconnect";
+  | "theme-disconnect"
+  | "antagonist-shallow"
+  | "antagonist-absent"
+  | "antagonist-incompetent"
+  | "antagonist-no-philosophy"
+  | "antagonist-no-mirror";
 
 export interface AnalysisIssue {
   id: string;

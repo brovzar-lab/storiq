@@ -12,6 +12,7 @@ import type {
   IssueCategory,
 } from "@/components/Analysis/IssueCard";
 import { calculateArcHealth } from "@/lib/visualizations/characterJourneyMapper";
+import type { AntagonistAuditResult } from "@/lib/agents/lenses/antagonistAudit";
 
 /**
  * Extract issues from Theme Constellation data
@@ -221,12 +222,120 @@ export function extractEmotionalIssues(
 }
 
 /**
+ * Extract issues from Antagonist Audit data
+ */
+export function extractAntagonistIssues(
+  audit: AntagonistAuditResult
+): AnalysisIssue[] {
+  const issues: AnalysisIssue[] = [];
+
+  // Convert AntagonistIssue to AnalysisIssue
+  audit.issues.forEach((issue) => {
+    let issueType: IssueType = "antagonist-shallow";
+    let severity: IssueSeverity = "warning";
+
+    // Map antagonist issue types
+    switch (issue.type) {
+      case "shallow_motivation":
+        issueType = "antagonist-shallow";
+        severity = "warning";
+        break;
+      case "absent_too_long":
+        issueType = "antagonist-absent";
+        severity = "warning";
+        break;
+      case "incompetent":
+        issueType = "antagonist-incompetent";
+        severity = "critical";
+        break;
+      case "no_philosophy":
+        issueType = "antagonist-no-philosophy";
+        severity = "warning";
+        break;
+      case "no_mirror_connection":
+        issueType = "antagonist-no-mirror";
+        severity = "note";
+        break;
+      case "multiple_unfocused":
+        issueType = "antagonist-shallow";
+        severity = "note";
+        break;
+    }
+
+    // Override with API-provided severity if available
+    if (issue.severity === "critical") severity = "critical";
+    else if (issue.severity === "important") severity = "warning";
+    else if (issue.severity === "suggestion") severity = "note";
+
+    issues.push({
+      id: uuid(),
+      title: `Antagonist: ${issue.antagonistName || "Opposition"}`,
+      description: issue.description + (issue.suggestion ? ` ${issue.suggestion}` : ""),
+      severity,
+      category: "character",
+      issueType,
+      issueContext: {
+        elementName: issue.antagonistName,
+        sequenceName: issue.sequenceId,
+      },
+    });
+  });
+
+  // Check overall threat level
+  if (audit.overallThreatLevel < 40) {
+    issues.push({
+      id: uuid(),
+      title: "Low Antagonist Threat Level",
+      description: `Your antagonist(s) register a threat level of only ${audit.overallThreatLevel}/100. Consider making them more competent, more present, or giving them a clearer philosophy.`,
+      severity: "warning",
+      category: "character",
+      issueType: "antagonist-incompetent",
+      issueContext: {},
+    });
+  }
+
+  // Check for antagonist weaknesses
+  audit.antagonists.forEach((ant) => {
+    if (ant.competenceScore < 4) {
+      issues.push({
+        id: uuid(),
+        title: `Weak Antagonist: ${ant.name}`,
+        description: `${ant.name} has a low competence score (${ant.competenceScore}/10). They may not feel like a genuine threat to your protagonist.`,
+        severity: "warning",
+        category: "character",
+        issueType: "antagonist-incompetent",
+        issueContext: {
+          elementName: ant.name,
+        },
+      });
+    }
+
+    if (!ant.thanosTestPass) {
+      issues.push({
+        id: uuid(),
+        title: `One-Dimensional: ${ant.name}`,
+        description: `${ant.name} doesn't pass the "Thanos Test" - could you write a version where they're sympathetic? Consider deepening their motivation.`,
+        severity: "note",
+        category: "character",
+        issueType: "antagonist-no-philosophy",
+        issueContext: {
+          elementName: ant.name,
+        },
+      });
+    }
+  });
+
+  return issues;
+}
+
+/**
  * Aggregate all issues from different analysis types
  */
 export function aggregateAllIssues(
   themeData: ThemeConstellation | null,
   characterData: CharacterArc | null,
-  emotionalData: (EmotionalJourney & { issues?: string[] }) | null
+  emotionalData: (EmotionalJourney & { issues?: string[] }) | null,
+  antagonistData?: AntagonistAuditResult | null
 ): AnalysisIssue[] {
   const allIssues: AnalysisIssue[] = [];
 
@@ -240,6 +349,10 @@ export function aggregateAllIssues(
 
   if (emotionalData) {
     allIssues.push(...extractEmotionalIssues(emotionalData));
+  }
+
+  if (antagonistData) {
+    allIssues.push(...extractAntagonistIssues(antagonistData));
   }
 
   // Sort by severity (critical first, then warning, then note)
