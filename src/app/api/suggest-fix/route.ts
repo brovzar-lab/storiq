@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  callAI,
+  API_TIMEOUTS,
+  resolveProvider,
+  NO_API_KEY_ERROR,
+  parseAIResponseJSON,
+} from "@/lib/api";
 
 export const dynamic = "force-dynamic";
-
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const GOOGLE_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
 
 type IssueType =
   | "floating-scene"
@@ -23,19 +27,14 @@ type IssueType =
 interface SuggestFixRequest {
   issueType: IssueType;
   issueContext: {
-    // For floating scene/character
     elementName?: string;
     elementType?: "scene" | "character";
     sceneNumber?: number;
     sceneContent?: string;
-
-    // For arc issues
     sequenceName?: string;
     sequenceContent?: string;
     currentArcState?: string;
     expectedArcState?: string;
-
-    // For emotional issues
     pageRange?: { start: number; end: number };
     currentEmotion?: string;
     currentIntensity?: number;
@@ -57,7 +56,7 @@ interface SuggestFixResponse {
   suggestion: string;
   specificActions: string[];
   exampleDialogue?: string;
-  question?: string; // A Socratic question to guide the writer
+  question?: string;
 }
 
 function buildSystemPrompt(genreId: string): string {
@@ -225,91 +224,10 @@ Return ONLY the JSON object.`;
   return prompt;
 }
 
-async function callAnthropic(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string> {
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2048,
-      temperature: 0.7, // Slightly more creative for suggestions
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || "Anthropic API request failed");
-  }
-
-  const data = await response.json();
-  return data.content[0]?.text || "";
-}
-
-async function callGoogle(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string> {
-  const response = await fetch(`${GOOGLE_API_URL}?key=${apiKey}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 2048,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || "Google API request failed");
-  }
-
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-}
-
-function parseAIResponse(content: string): SuggestFixResponse {
-  let jsonStr = content;
-
-  // Remove markdown code blocks if present
-  const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1];
-  } else {
-    const rawJsonMatch = content.match(/\{[\s\S]*\}/);
-    if (rawJsonMatch) {
-      jsonStr = rawJsonMatch[0];
-    }
-  }
-
-  const result = JSON.parse(jsonStr);
-
-  // Ensure required fields
-  if (!result.suggestion) {
-    result.suggestion = "Consider how this element serves your story's core theme.";
-  }
-  if (!result.specificActions || !Array.isArray(result.specificActions)) {
-    result.specificActions = ["Review the element's purpose in the story"];
-  }
-
-  return result as SuggestFixResponse;
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body: SuggestFixRequest = await request.json();
-    const { issueType, issueContext, screenplayContext } = body;
+    const { issueType, screenplayContext } = body;
 
     if (!issueType || !screenplayContext) {
       return NextResponse.json(
@@ -318,55 +236,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Determine API key and provider
-    let apiKey = body.apiKey;
-    let provider = body.provider;
+    const providerConfig = resolveProvider(body.apiKey, body.provider);
 
-    if (!apiKey) {
-      const anthropicKey = process.env.STORIQ_ANTHROPIC_KEY;
-      const googleKey = process.env.GOOGLE_API_KEY;
-      const defaultProvider = process.env.AI_PROVIDER;
-
-      if (defaultProvider === "google" && googleKey) {
-        apiKey = googleKey;
-        provider = "google";
-      } else if (anthropicKey) {
-        apiKey = anthropicKey;
-        provider = "anthropic";
-      } else if (googleKey) {
-        apiKey = googleKey;
-        provider = "google";
-      }
+    if (!providerConfig) {
+      return NextResponse.json({ message: NO_API_KEY_ERROR }, { status: 401 });
     }
 
-    if (apiKey && !provider) {
-      if (apiKey.startsWith("sk-ant-")) {
-        provider = "anthropic";
-      } else if (apiKey.startsWith("AIza")) {
-        provider = "google";
-      }
-    }
-
-    if (!apiKey) {
-      return NextResponse.json(
-        { message: "No API key configured. Add ANTHROPIC_API_KEY or GOOGLE_API_KEY to your .env.local file." },
-        { status: 401 }
-      );
-    }
-
-    // Build prompts
     const systemPrompt = buildSystemPrompt(screenplayContext.genreId);
     const userPrompt = buildUserPrompt(body);
 
-    // Call AI
-    let content: string;
-    if (provider === "google") {
-      content = await callGoogle(apiKey, systemPrompt, userPrompt);
-    } else {
-      content = await callAnthropic(apiKey, systemPrompt, userPrompt);
-    }
+    const content = await callAI(
+      providerConfig.apiKey,
+      providerConfig.provider,
+      systemPrompt,
+      userPrompt,
+      { maxTokens: 2048, temperature: 0.7, timeout: API_TIMEOUTS.QUICK }
+    );
 
-    const result = parseAIResponse(content);
+    const result = parseAIResponseJSON<SuggestFixResponse>(content);
+
+    // Ensure required fields
+    if (!result.suggestion) {
+      result.suggestion =
+        "Consider how this element serves your story's core theme.";
+    }
+    if (!result.specificActions || !Array.isArray(result.specificActions)) {
+      result.specificActions = ["Review the element's purpose in the story"];
+    }
 
     return NextResponse.json(result);
   } catch (error) {

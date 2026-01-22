@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  callAI,
+  API_TIMEOUTS,
+  resolveProvider,
+  NO_API_KEY_ERROR,
+  parseAIResponseJSON,
+} from "@/lib/api";
 
 export const dynamic = "force-dynamic";
-// Using Node.js runtime for proper env var access
-
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-const GOOGLE_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
 
 interface SoulAnalysisRequest {
   screenplay: {
@@ -25,35 +28,53 @@ interface SoulAnalysisRequest {
     id: string;
     name: string;
   };
-  apiKey?: string; // Optional - will use env var if not provided
-  provider?: "anthropic" | "google"; // Optional - will auto-detect
+  apiKey?: string;
+  provider?: "anthropic" | "google";
 }
 
-function buildPrompts(screenplay: SoulAnalysisRequest["screenplay"], genre: SoulAnalysisRequest["genre"]) {
-  // Build a condensed version of the screenplay for the prompt
+interface SoulResponse {
+  centralQuestion: string;
+  thematicArgument: string;
+  controllingIdea: string;
+  protagonistLie: string;
+  protagonistTruth: string;
+}
+
+function buildPrompts(
+  screenplay: SoulAnalysisRequest["screenplay"],
+  genre: SoulAnalysisRequest["genre"]
+) {
   const sceneCount = screenplay.scenes.length;
   const sceneSamples: string[] = [];
 
   // Always include first 3 scenes
   screenplay.scenes.slice(0, 3).forEach((scene) => {
-    sceneSamples.push(`SCENE ${scene.sceneNumber}: ${scene.heading}\n${scene.content.slice(0, 1000)}`);
+    sceneSamples.push(
+      `SCENE ${scene.sceneNumber}: ${scene.heading}\n${scene.content.slice(0, 1000)}`
+    );
   });
 
   // Include midpoint scenes
   if (sceneCount > 10) {
     const midpoint = Math.floor(sceneCount / 2);
     screenplay.scenes.slice(midpoint - 1, midpoint + 2).forEach((scene) => {
-      sceneSamples.push(`SCENE ${scene.sceneNumber}: ${scene.heading}\n${scene.content.slice(0, 1000)}`);
+      sceneSamples.push(
+        `SCENE ${scene.sceneNumber}: ${scene.heading}\n${scene.content.slice(0, 1000)}`
+      );
     });
   }
 
   // Include last 3 scenes
   screenplay.scenes.slice(-3).forEach((scene) => {
-    sceneSamples.push(`SCENE ${scene.sceneNumber}: ${scene.heading}\n${scene.content.slice(0, 1000)}`);
+    sceneSamples.push(
+      `SCENE ${scene.sceneNumber}: ${scene.heading}\n${scene.content.slice(0, 1000)}`
+    );
   });
 
-  // Get top characters
-  const topCharacters = screenplay.characters.slice(0, 5).map((c) => c.name).join(", ");
+  const topCharacters = screenplay.characters
+    .slice(0, 5)
+    .map((c) => c.name)
+    .join(", ");
 
   const systemPrompt = `You are a master story analyst specializing in screenplay development. Your task is to identify the "soul" of a screenplay - its thematic core, central dramatic question, and character transformation arc.
 
@@ -92,144 +113,39 @@ Based on these scenes, what is the soul of this screenplay? Be specific to this 
   return { systemPrompt, userPrompt };
 }
 
-async function callAnthropic(apiKey: string, systemPrompt: string, userPrompt: string) {
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      temperature: 0.7,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || "Anthropic API request failed");
-  }
-
-  const data = await response.json();
-  return data.content[0]?.text || "";
-}
-
-async function callGoogle(apiKey: string, systemPrompt: string, userPrompt: string) {
-  const response = await fetch(`${GOOGLE_API_URL}?key=${apiKey}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [
-            { text: `${systemPrompt}\n\n${userPrompt}` }
-          ]
-        }
-      ],
-      generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 1024,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || "Google API request failed");
-  }
-
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-}
-
-function parseAIResponse(content: string) {
-  // Extract JSON from the response (in case there's any extra text)
-  const jsonMatch = content.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error("No JSON found in response");
-  }
-
-  const soul = JSON.parse(jsonMatch[0]);
-
-  // Validate required fields
-  if (
-    !soul.centralQuestion ||
-    !soul.thematicArgument ||
-    !soul.controllingIdea ||
-    !soul.protagonistLie ||
-    !soul.protagonistTruth
-  ) {
-    throw new Error("Missing required soul fields");
-  }
-
-  return soul;
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body: SoulAnalysisRequest = await request.json();
     const { screenplay, genre } = body;
 
-    // Determine which API key to use (priority: request body > env var)
-    let apiKey = body.apiKey;
-    let provider = body.provider;
+    const providerConfig = resolveProvider(body.apiKey, body.provider);
 
-    // Check environment variables if no key provided
-    if (!apiKey) {
-      const anthropicKey = process.env.STORIQ_ANTHROPIC_KEY;
-      const googleKey = process.env.GOOGLE_API_KEY;
-      const defaultProvider = process.env.AI_PROVIDER;
-
-      console.log("ENV DEBUG - ANTHROPIC_API_KEY exists:", !!anthropicKey);
-      console.log("ENV DEBUG - GOOGLE_API_KEY exists:", !!googleKey);
-      console.log("ENV DEBUG - AI_PROVIDER:", defaultProvider);
-
-      if (defaultProvider === "google" && googleKey) {
-        apiKey = googleKey;
-        provider = "google";
-      } else if (anthropicKey) {
-        apiKey = anthropicKey;
-        provider = "anthropic";
-      } else if (googleKey) {
-        apiKey = googleKey;
-        provider = "google";
-      }
-    }
-
-    // Auto-detect provider from key format if not specified
-    if (apiKey && !provider) {
-      if (apiKey.startsWith("sk-ant-")) {
-        provider = "anthropic";
-      } else if (apiKey.startsWith("AIza")) {
-        provider = "google";
-      }
-    }
-
-    if (!apiKey) {
-      return NextResponse.json(
-        { message: "No API key configured. Add ANTHROPIC_API_KEY or GOOGLE_API_KEY to your .env.local file, or configure in Settings." },
-        { status: 401 }
-      );
+    if (!providerConfig) {
+      return NextResponse.json({ message: NO_API_KEY_ERROR }, { status: 401 });
     }
 
     const { systemPrompt, userPrompt } = buildPrompts(screenplay, genre);
 
-    let content: string;
+    const content = await callAI(
+      providerConfig.apiKey,
+      providerConfig.provider,
+      systemPrompt,
+      userPrompt,
+      { maxTokens: 1024, temperature: 0.7, timeout: API_TIMEOUTS.QUICK }
+    );
 
-    if (provider === "google") {
-      content = await callGoogle(apiKey, systemPrompt, userPrompt);
-    } else {
-      // Default to Anthropic
-      content = await callAnthropic(apiKey, systemPrompt, userPrompt);
+    const soul = parseAIResponseJSON<SoulResponse>(content);
+
+    // Validate required fields
+    if (
+      !soul.centralQuestion ||
+      !soul.thematicArgument ||
+      !soul.controllingIdea ||
+      !soul.protagonistLie ||
+      !soul.protagonistTruth
+    ) {
+      throw new Error("Missing required soul fields");
     }
-
-    const soul = parseAIResponse(content);
 
     return NextResponse.json({
       ...soul,
