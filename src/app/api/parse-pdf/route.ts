@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 import { parseScreenplayText } from "@/lib/parser";
+import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
+import type { TextItem } from "pdfjs-dist/types/src/display/api";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+// Disable worker for serverless environment
+GlobalWorkerOptions.workerSrc = "";
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,13 +17,29 @@ export async function POST(request: NextRequest) {
       request.headers.get("X-Filename") || "screenplay.pdf"
     );
 
-    // Dynamic import pdf-parse v1 (simpler API, no worker issues)
-    const pdfParse = (await import("pdf-parse")).default;
+    // Load PDF document using pdfjs-dist
+    const uint8Array = new Uint8Array(buffer);
+    const pdf = await getDocument({
+      data: uint8Array,
+      useSystemFonts: true,
+      disableFontFace: true,
+    }).promise;
 
-    // Parse the PDF buffer directly
-    const data = await pdfParse(buffer);
-    const text = data.text;
-    const actualPageCount = data.numpages || 1;
+    const actualPageCount = pdf.numPages;
+
+    // Extract text from all pages
+    const textParts: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .filter((item): item is TextItem => "str" in item)
+        .map((item) => item.str)
+        .join(" ");
+      textParts.push(pageText);
+    }
+
+    const text = textParts.join("\n\n");
 
     if (!text || text.trim().length === 0) {
       return NextResponse.json(
