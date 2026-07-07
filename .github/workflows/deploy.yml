@@ -40,6 +40,7 @@ jobs:
           args: deploy --only hosting
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_CLI_EXPERIMENTS: webframeworks
 
       - name: Comment on merged PR
         if: github.event_name == 'push' && success()
