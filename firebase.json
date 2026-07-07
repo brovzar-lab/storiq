@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "storiq",
     "source": ".",
     "ignore": [
       "firebase.json",
